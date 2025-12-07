@@ -187,7 +187,7 @@ class FMPClient:
         except Exception as e:
             logger.warning(f"Could not configure SQLite WAL mode: {e}")
 
-    def _wait_for_rate_limit(self) -> None:
+    def _check_rate_limit(self) -> None:
         """Wait if necessary to stay within rate limits.
 
         Uses a sliding window algorithm to track requests over the last minute.
@@ -207,16 +207,15 @@ class FMPClient:
                 oldest_in_window = self._request_timestamps[0]
                 wait_time = oldest_in_window - window_start + 0.1  # +100ms buffer
                 if wait_time > 0:
-                    logger.debug(f"Rate limit: waiting {wait_time:.2f}s")
+                    logger.info(f"Rate limit: waiting {wait_time:.2f}s ({len(self._request_timestamps)} requests in last minute)")
                     time.sleep(wait_time)
-                    # Clean up again after waiting
-                    now = time.time()
-                    window_start = now - 60.0
-                    while self._request_timestamps and self._request_timestamps[0] < window_start:
-                        self._request_timestamps.popleft()
 
-            # Record this request
+    def _record_request(self) -> None:
+        """Record a timestamp for an actual API request (not cached)."""
+        with self._rate_limit_lock:
             self._request_timestamps.append(time.time())
+            # Check if we need to slow down for next request
+            self._check_rate_limit()
 
     def _get(
         self,
@@ -243,14 +242,15 @@ class FMPClient:
 
         for attempt in range(max_retries + 1):
             try:
-                # Apply proactive rate limiting before non-cached requests
-                self._wait_for_rate_limit()
-
+                # Check cache first without rate limiting
                 response = self.session.get(url, params=params)
 
                 if hasattr(response, "from_cache") and response.from_cache:
                     logger.debug(f"Retrieved {endpoint} from cache")
+                    # Cached response - no rate limit needed
                 else:
+                    # Actual API call - apply rate limiting for next request
+                    self._record_request()
                     logger.debug(f"Fetched {endpoint} from API")
 
                 if response.status_code == OK:
