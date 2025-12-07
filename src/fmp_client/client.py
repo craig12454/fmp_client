@@ -622,3 +622,314 @@ class FMPClient:
 
         data = self._get("company-screener", params=params)
         return self._to_dataframe(data) if return_type == "df" else data
+
+    # -------------------------------------------------------------------------
+    # Historical Price Data (for Backtesting)
+    # -------------------------------------------------------------------------
+
+    def get_historical_price_full(
+        self,
+        symbol: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get full historical EOD prices (up to 5 years on Starter plan).
+
+        Returns OHLCV data with change, changePercent, and vwap.
+
+        Args:
+            symbol: Stock ticker symbol.
+            date_from: Start date (YYYY-MM-DD format).
+            date_to: End date (YYYY-MM-DD format).
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Historical price data with OHLCV and additional metrics.
+        """
+        params: Dict[str, Any] = {"symbol": symbol}
+        if date_from:
+            params["from"] = date_from
+        if date_to:
+            params["to"] = date_to
+        data = self._get("historical-price-eod/full", params=params)
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_historical_market_cap(
+        self,
+        symbol: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical market capitalization data.
+
+        Essential for point-in-time size screening in backtesting.
+
+        Args:
+            symbol: Stock ticker symbol.
+            date_from: Start date (YYYY-MM-DD format).
+            date_to: End date (YYYY-MM-DD format).
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Historical market cap data.
+        """
+        params: Dict[str, Any] = {"symbol": symbol}
+        if date_from:
+            params["from"] = date_from
+        if date_to:
+            params["to"] = date_to
+        data = self._get("historical-market-capitalization", params=params)
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    # -------------------------------------------------------------------------
+    # Historical Fundamental Data (for Backtesting)
+    # -------------------------------------------------------------------------
+
+    def get_income_statement(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 5,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical income statements.
+
+        Includes filingDate for point-in-time accuracy.
+        Period: 'annual' on Starter, 'quarter' on Premium+.
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: "annual" or "quarter".
+            limit: Number of periods to return.
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Income statement data including revenue, net income, EPS.
+        """
+        params = {"symbol": symbol, "period": period, "limit": limit}
+        data = self._get("income-statement", params=params)
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_balance_sheet(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 5,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical balance sheet statements.
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: "annual" or "quarter".
+            limit: Number of periods to return.
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Balance sheet data including assets, liabilities, equity.
+        """
+        params = {"symbol": symbol, "period": period, "limit": limit}
+        data = self._get("balance-sheet-statement", params=params)
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_cash_flow_statement(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 5,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical cash flow statements.
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: "annual" or "quarter".
+            limit: Number of periods to return.
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Cash flow data including operating, investing, financing flows.
+        """
+        params = {"symbol": symbol, "period": period, "limit": limit}
+        data = self._get("cash-flow-statement", params=params)
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_key_metrics(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 5,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical key metrics (PE, PB, EV/EBITDA, ROE, etc.).
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: "annual" or "quarter".
+            limit: Number of periods to return.
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Key financial metrics including valuation and profitability ratios.
+        """
+        params = {"symbol": symbol, "period": period, "limit": limit}
+        data = self._get("key-metrics", params=params)
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_income_statement_growth(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 5,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical income statement growth rates.
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: "annual" or "quarter".
+            limit: Number of periods to return.
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Growth rates for revenue, net income, EPS, etc.
+        """
+        params = {"symbol": symbol, "period": period, "limit": limit}
+        data = self._get("income-statement-growth", params=params)
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    # -------------------------------------------------------------------------
+    # Index Constituents (for Survivorship-Safe Backtesting)
+    # -------------------------------------------------------------------------
+
+    def get_sp500_constituents(
+        self,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get current S&P 500 constituents.
+
+        Returns:
+            List of current S&P 500 member stocks.
+        """
+        data = self._get("sp500-constituent")
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_historical_sp500_constituents(
+        self,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical S&P 500 constituent changes.
+
+        Returns additions/removals with dates for survivorship-safe backtesting.
+
+        Returns:
+            Historical additions and removals from the S&P 500.
+        """
+        data = self._get("historical-sp500-constituent")
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_nasdaq_constituents(
+        self,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get current NASDAQ 100 constituents.
+
+        Returns:
+            List of current NASDAQ 100 member stocks.
+        """
+        data = self._get("nasdaq-constituent")
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_historical_nasdaq_constituents(
+        self,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical NASDAQ 100 constituent changes.
+
+        Returns:
+            Historical additions and removals from the NASDAQ 100.
+        """
+        data = self._get("historical-nasdaq-constituent")
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    # -------------------------------------------------------------------------
+    # Corporate Events (for Price Adjustments)
+    # -------------------------------------------------------------------------
+
+    def get_stock_splits(
+        self,
+        symbol: str,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical stock splits for price adjustment.
+
+        Args:
+            symbol: Stock ticker symbol.
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Historical stock split data.
+        """
+        data = self._get("splits", params={"symbol": symbol})
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_dividends(
+        self,
+        symbol: str,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical dividends for total return calculation.
+
+        Args:
+            symbol: Stock ticker symbol.
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Historical dividend data.
+        """
+        data = self._get("dividends", params={"symbol": symbol})
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    # -------------------------------------------------------------------------
+    # Market Context (for Benchmarking)
+    # -------------------------------------------------------------------------
+
+    def get_historical_sector_performance(
+        self,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical sector performance.
+
+        Returns:
+            Historical performance data by sector.
+        """
+        data = self._get("historical-sector-performance")
+        return self._to_dataframe(data) if return_type == "df" else data
+
+    def get_index_historical_price(
+        self,
+        symbol: str = "^GSPC",
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        return_type: str = "json",
+    ) -> Union[List[Dict[str, Any]], pd.DataFrame]:
+        """Get historical index prices (S&P 500, NASDAQ, etc.).
+
+        Args:
+            symbol: Index symbol (e.g., "^GSPC" for S&P 500, "^IXIC" for NASDAQ).
+            date_from: Start date (YYYY-MM-DD format).
+            date_to: End date (YYYY-MM-DD format).
+            return_type: "json" for dict/list, "df" for DataFrame.
+
+        Returns:
+            Historical index price data.
+        """
+        params: Dict[str, Any] = {"symbol": symbol}
+        if date_from:
+            params["from"] = date_from
+        if date_to:
+            params["to"] = date_to
+        data = self._get("historical-price-eod/full", params=params)
+        return self._to_dataframe(data) if return_type == "df" else data
