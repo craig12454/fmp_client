@@ -5,33 +5,8 @@ in this directory without needing to import them.
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from fmp_client import FMPClient
-# Sample API responses for mocking
-SAMPLE_QUOTE_RESPONSE = [
-    {
-        "symbol": "AAPL",
-        "name": "Apple Inc.",
-        "price": 175.50,
-        "change": 2.35,
-        "changesPercentage": 1.36,
-        "volume": 52436789,
-    }
-]
-
-SAMPLE_PROFILE_RESPONSE = [
-    {
-        "symbol": "AAPL",
-        "companyName": "Apple Inc.",
-        "sector": "Technology",
-        "industry": "Consumer Electronics",
-        "marketCap": 2800000000000,
-        "description": "Apple designs and manufactures consumer electronics.",
-    }
-]
-
-
-# TODO(human): Implement the fixtures below
 
 
 @pytest.fixture
