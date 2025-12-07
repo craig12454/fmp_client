@@ -4,9 +4,11 @@ import logging
 import os
 import sqlite3
 import time
+from collections import deque
 from datetime import timedelta
 from http.client import OK, TOO_MANY_REQUESTS
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
@@ -61,6 +63,9 @@ class FMPClient:
         cache_backend: str = "sqlite",
         cache_name: str = "fmp_cache",
         cache_expire_after: int = 300,
+        requests_per_minute: int = 300,
+        rate_limit_retry: bool = True,
+        rate_limit_max_retries: int = 3,
     ) -> None:
         """Initialize the FMP client.
 
@@ -71,6 +76,9 @@ class FMPClient:
             cache_backend: Cache backend type (default: "sqlite").
             cache_name: Name for the cache database (default: "fmp_cache").
             cache_expire_after: Cache TTL in seconds (default: 300).
+            requests_per_minute: Max requests per minute (default: 300 for Starter plan).
+            rate_limit_retry: Whether to auto-retry on 429 responses (default: True).
+            rate_limit_max_retries: Max retries on 429 before giving up (default: 3).
 
         Configuration priority:
             1. Direct `api_key` parameter
@@ -89,6 +97,10 @@ class FMPClient:
                 backend: "sqlite"
                 name: "fmp_cache"
                 expire_after: 3600
+              rate_limit:
+                requests_per_minute: 300
+                retry: true
+                max_retries: 3
         """
         # Load configuration from various sources
         fmp_config = self._load_config(config_path, config)
@@ -124,9 +136,24 @@ class FMPClient:
         if self._cache_backend == "sqlite":
             self._configure_sqlite_wal()
 
+        # Extract rate limit settings (params override config)
+        rate_limit_config = fmp_config.get("rate_limit", {})
+        self._requests_per_minute = rate_limit_config.get(
+            "requests_per_minute", requests_per_minute
+        )
+        self._rate_limit_retry = rate_limit_config.get("retry", rate_limit_retry)
+        self._rate_limit_max_retries = rate_limit_config.get(
+            "max_retries", rate_limit_max_retries
+        )
+
+        # Sliding window rate limiter: track timestamps of recent requests
+        self._request_timestamps: deque[float] = deque()
+        self._rate_limit_lock = Lock()
+
         logger.info(
             f"FMPClient initialized with cache backend: {self._cache_backend}, "
-            f"expire_after: {self._cache_expire_after}s"
+            f"expire_after: {self._cache_expire_after}s, "
+            f"rate_limit: {self._requests_per_minute} req/min"
         )
 
     def _load_config(
@@ -160,13 +187,44 @@ class FMPClient:
         except Exception as e:
             logger.warning(f"Could not configure SQLite WAL mode: {e}")
 
+    def _wait_for_rate_limit(self) -> None:
+        """Wait if necessary to stay within rate limits.
+
+        Uses a sliding window algorithm to track requests over the last minute.
+        Thread-safe for concurrent usage.
+        """
+        with self._rate_limit_lock:
+            now = time.time()
+            window_start = now - 60.0  # 1 minute window
+
+            # Remove timestamps older than the window
+            while self._request_timestamps and self._request_timestamps[0] < window_start:
+                self._request_timestamps.popleft()
+
+            # Check if we're at the limit
+            if len(self._request_timestamps) >= self._requests_per_minute:
+                # Calculate how long to wait
+                oldest_in_window = self._request_timestamps[0]
+                wait_time = oldest_in_window - window_start + 0.1  # +100ms buffer
+                if wait_time > 0:
+                    logger.debug(f"Rate limit: waiting {wait_time:.2f}s")
+                    time.sleep(wait_time)
+                    # Clean up again after waiting
+                    now = time.time()
+                    window_start = now - 60.0
+                    while self._request_timestamps and self._request_timestamps[0] < window_start:
+                        self._request_timestamps.popleft()
+
+            # Record this request
+            self._request_timestamps.append(time.time())
+
     def _get(
         self,
         endpoint: str,
         params: Optional[Dict[str, Any]] = None,
         max_retries: int = 3,
     ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """Make GET request to FMP API with caching and retry logic.
+        """Make GET request to FMP API with caching, rate limiting, and retry logic.
 
         Args:
             endpoint: API endpoint path (without base URL).
@@ -177,13 +235,17 @@ class FMPClient:
             JSON response as dict or list.
 
         Raises:
-            TooManyRequestsException: If rate limit exceeded.
+            TooManyRequestsException: If rate limit exceeded after retries.
             requests.RequestException: If request fails.
         """
         url = f"{self.BASE_URL}/{endpoint}"
+        rate_limit_attempts = 0
 
         for attempt in range(max_retries + 1):
             try:
+                # Apply proactive rate limiting before non-cached requests
+                self._wait_for_rate_limit()
+
                 response = self.session.get(url, params=params)
 
                 if hasattr(response, "from_cache") and response.from_cache:
@@ -194,7 +256,17 @@ class FMPClient:
                 if response.status_code == OK:
                     return response.json()
                 elif response.status_code == TOO_MANY_REQUESTS:
-                    logger.error("Rate limit exceeded")
+                    rate_limit_attempts += 1
+                    if self._rate_limit_retry and rate_limit_attempts <= self._rate_limit_max_retries:
+                        # Exponential backoff: 2s, 4s, 8s
+                        wait_time = 2 ** rate_limit_attempts
+                        logger.warning(
+                            f"Rate limit hit (429), retry {rate_limit_attempts}/{self._rate_limit_max_retries} "
+                            f"in {wait_time}s"
+                        )
+                        time.sleep(wait_time)
+                        continue
+                    logger.error("Rate limit exceeded after retries")
                     raise TooManyRequestsException()
                 else:
                     logger.error(
