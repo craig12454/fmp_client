@@ -8,7 +8,7 @@ from collections import deque
 from datetime import timedelta
 from http.client import OK, TOO_MANY_REQUESTS
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
@@ -148,7 +148,7 @@ class FMPClient:
 
         # Sliding window rate limiter: track timestamps of recent requests
         self._request_timestamps: deque[float] = deque()
-        self._rate_limit_lock = Lock()
+        self._rate_limit_lock = RLock()  # Reentrant lock for nested calls
 
         logger.info(
             f"FMPClient initialized with cache backend: {self._cache_backend}, "
