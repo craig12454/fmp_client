@@ -64,6 +64,7 @@ class FMPClient:
         cache_name: str = "fmp_cache",
         cache_expire_after: int = 300,
         requests_per_minute: int = 300,
+        rate_limit_safety_margin: float = 0.9,
         rate_limit_retry: bool = True,
         rate_limit_max_retries: int = 3,
     ) -> None:
@@ -77,6 +78,7 @@ class FMPClient:
             cache_name: Name for the cache database (default: "fmp_cache").
             cache_expire_after: Cache TTL in seconds (default: 300).
             requests_per_minute: Max requests per minute (default: 300 for Starter plan).
+            rate_limit_safety_margin: Safety margin for local throttling (default: 0.9).
             rate_limit_retry: Whether to auto-retry on 429 responses (default: True).
             rate_limit_max_retries: Max retries on 429 before giving up (default: 3).
 
@@ -141,6 +143,15 @@ class FMPClient:
         self._requests_per_minute = rate_limit_config.get(
             "requests_per_minute", requests_per_minute
         )
+        self._rate_limit_safety_margin = rate_limit_config.get(
+            "safety_margin", rate_limit_safety_margin
+        )
+        if not (0 < self._rate_limit_safety_margin <= 1):
+            raise ValueError("rate_limit_safety_margin must be in (0, 1]")
+        self._effective_requests_per_minute = max(
+            1,
+            int(self._requests_per_minute * self._rate_limit_safety_margin),
+        )
         self._rate_limit_retry = rate_limit_config.get("retry", rate_limit_retry)
         self._rate_limit_max_retries = rate_limit_config.get(
             "max_retries", rate_limit_max_retries
@@ -153,7 +164,8 @@ class FMPClient:
         logger.info(
             f"FMPClient initialized with cache backend: {self._cache_backend}, "
             f"expire_after: {self._cache_expire_after}s, "
-            f"rate_limit: {self._requests_per_minute} req/min"
+            f"rate_limit: {self._requests_per_minute} req/min "
+            f"(effective local cap: {self._effective_requests_per_minute} req/min)"
         )
 
     def _load_config(
@@ -187,35 +199,38 @@ class FMPClient:
         except Exception as e:
             logger.warning(f"Could not configure SQLite WAL mode: {e}")
 
-    def _check_rate_limit(self) -> None:
-        """Wait if necessary to stay within rate limits.
+    def _acquire_rate_limit_slot(self) -> float:
+        """Reserve a request slot before making an outbound API call."""
+        while True:
+            with self._rate_limit_lock:
+                now = time.time()
+                window_start = now - 60.0
 
-        Uses a sliding window algorithm to track requests over the last minute.
-        Thread-safe for concurrent usage.
-        """
-        with self._rate_limit_lock:
-            now = time.time()
-            window_start = now - 60.0  # 1 minute window
+                while self._request_timestamps and self._request_timestamps[0] < window_start:
+                    self._request_timestamps.popleft()
 
-            # Remove timestamps older than the window
-            while self._request_timestamps and self._request_timestamps[0] < window_start:
-                self._request_timestamps.popleft()
+                if len(self._request_timestamps) < self._effective_requests_per_minute:
+                    self._request_timestamps.append(now)
+                    return now
 
-            # Check if we're at the limit
-            if len(self._request_timestamps) >= self._requests_per_minute:
-                # Calculate how long to wait
                 oldest_in_window = self._request_timestamps[0]
-                wait_time = oldest_in_window - window_start + 0.1  # +100ms buffer
-                if wait_time > 0:
-                    logger.info(f"Rate limit: waiting {wait_time:.2f}s ({len(self._request_timestamps)} requests in last minute)")
-                    time.sleep(wait_time)
+                wait_time = oldest_in_window + 60.0 - now + 0.1
 
-    def _record_request(self) -> None:
-        """Record a timestamp for an actual API request (not cached)."""
+            if wait_time > 0:
+                logger.info(
+                    f"Rate limit: waiting {wait_time:.2f}s "
+                    f"({len(self._request_timestamps)} requests in last minute)"
+                )
+                time.sleep(wait_time)
+
+    def _release_rate_limit_slot(self, slot_timestamp: float) -> None:
+        """Release a reserved slot when we confirm a cache hit."""
         with self._rate_limit_lock:
-            self._request_timestamps.append(time.time())
-            # Check if we need to slow down for next request
-            self._check_rate_limit()
+            try:
+                self._request_timestamps.remove(slot_timestamp)
+            except ValueError:
+                # Another thread may have already pruned this timestamp.
+                pass
 
     def _get(
         self,
@@ -242,15 +257,15 @@ class FMPClient:
 
         for attempt in range(max_retries + 1):
             try:
-                # Check cache first without rate limiting
+                # Reserve slot before request to avoid overshooting under concurrency.
+                # Cache hits release the slot immediately after response.
+                slot_timestamp = self._acquire_rate_limit_slot()
                 response = self.session.get(url, params=params)
 
                 if hasattr(response, "from_cache") and response.from_cache:
+                    self._release_rate_limit_slot(slot_timestamp)
                     logger.debug(f"Retrieved {endpoint} from cache")
-                    # Cached response - no rate limit needed
                 else:
-                    # Actual API call - apply rate limiting for next request
-                    self._record_request()
                     logger.debug(f"Fetched {endpoint} from API")
 
                 if response.status_code == OK:
